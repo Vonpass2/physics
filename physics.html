@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebGL Physics Sandbox V2</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+            display:block;
+            color: white;
+            font-family: monospace;
+            font-size: 16px;
+        }
+        #buttons {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Click and drag to throw objects.</div>
+    <div id="buttons">
+        <button id="addSphereBtn">Add Sphere</button>
+        <button id="addBoxBtn">Add Box</button>
+        <button id="resetBtn">Reset</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
+                "cannon-es-debugger": "https://unpkg.com/cannon-es-debugger@1.0.0/dist/cannon-es-debugger.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import * as CANNON from 'cannon-es';
+        import CannonDebugger from 'cannon-es-debugger';
+
+        // ## 1. Scene Setup ##
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 6, 12);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // ## 2. Physics World Setup ##
+        const world = new CANNON.World({
+            gravity: new CANNON.Vec3(0, -9.82, 0)
+        });
+        world.broadphase = new CANNON.SAPBroadphase(world);
+        world.allowSleep = true;
+
+        // Optional: for visualizing the physics bodies
+        // const cannonDebugger = new CannonDebugger(scene, world);
+
+        // ## 3. Materials ##
+        const groundMaterial = new CANNON.Material('ground');
+        const objectMaterial = new CANNON.Material('object');
+        const contactMaterial = new CANNON.ContactMaterial(groundMaterial, objectMaterial, {
+            friction: 0.3,
+            restitution: 0.4
+        });
+        world.addContactMaterial(contactMaterial);
+
+
+        // ## 4. Creating Scene Objects ##
+        // Ground
+        const groundBody = new CANNON.Body({
+            type: CANNON.Body.STATIC,
+            shape: new CANNON.Plane(),
+            material: groundMaterial
+        });
+        groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        world.addBody(groundBody);
+
+        const groundMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(100, 100),
+            new THREE.MeshStandardMaterial({ color: 0xcccccc })
+        );
+        groundMesh.rotation.x = -Math.PI / 2;
+        groundMesh.receiveShadow = true;
+        scene.add(groundMesh);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(10, 20, 5);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+
+        // Store objects that need to be updated
+        let objectsToUpdate = [];
+
+        // Function to create a sphere
+        function createSphere(radius, position) {
+            const body = new CANNON.Body({
+                mass: 1,
+                shape: new CANNON.Sphere(radius),
+                material: objectMaterial
+            });
+            body.position.copy(position);
+            world.addBody(body);
+
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(radius),
+                new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(Math.random(), Math.random(), Math.random())
+                })
+            );
+            mesh.position.copy(body.position);
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            objectsToUpdate.push({ mesh, body });
+        }
+
+        // Function to create a box
+        function createBox(width, height, depth, position) {
+            const body = new CANNON.Body({
+                mass: 1,
+                shape: new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2)),
+                material: objectMaterial
+            });
+            body.position.copy(position);
+            world.addBody(body);
+
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(width, height, depth),
+                 new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(Math.random(), Math.random(), Math.random())
+                })
+            );
+            mesh.position.copy(body.position);
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            objectsToUpdate.push({ mesh, body });
+        }
+
+        // ## 5. User Interaction ##
+        document.getElementById('addSphereBtn').addEventListener('click', () => {
+             createSphere(0.5, new CANNON.Vec3(Math.random() * 4 - 2, 10, Math.random() * 4 - 2));
+        });
+        document.getElementById('addBoxBtn').addEventListener('click', () => {
+             createBox(1, 1, 1, new CANNON.Vec3(Math.random() * 4 - 2, 10, Math.random() * 4 - 2));
+        });
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            for(const obj of objectsToUpdate) {
+                world.removeBody(obj.body);
+                scene.remove(obj.mesh);
+            }
+            objectsToUpdate = [];
+        });
+
+        // Mouse Grabbing
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let grabbedBody = null;
+        let mouseConstraint = null;
+
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // A virtual plane for raycasting
+
+        window.addEventListener('mousedown', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = raycaster.intersectObjects(objectsToUpdate.map(o => o.mesh));
+
+            if (intersects.length > 0) {
+                const intersectedMesh = intersects[0].object;
+                const obj = objectsToUpdate.find(o => o.mesh === intersectedMesh);
+
+                if (obj) {
+                    grabbedBody = obj.body;
+                    grabbedBody.wakeUp();
+
+                    const hitPoint = intersects[0].point;
+                    const pivot = grabbedBody.worldToLocal(new CANNON.Vec3().copy(hitPoint));
+
+                    // Create a point-to-point constraint
+                    mouseConstraint = new CANNON.PointToPointConstraint(grabbedBody, pivot, grabbedBody, pivot);
+                    world.addConstraint(mouseConstraint);
+
+                    // Move the virtual plane to the depth of the grabbed object
+                    plane.setFromNormalAndCoplanarPoint(
+                        camera.getWorldDirection(plane.normal),
+                        hitPoint
+                    );
+                }
+            }
+        });
+
+        window.addEventListener('mousemove', (event) => {
+            if (mouseConstraint) {
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+
+                const intersection = new THREE.Vector3();
+                raycaster.ray.intersectPlane(plane, intersection);
+
+                if (intersection) {
+                    mouseConstraint.pivotB.copy(intersection);
+                    grabbedBody.wakeUp();
+                }
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (mouseConstraint) {
+                world.removeConstraint(mouseConstraint);
+                mouseConstraint = null;
+                grabbedBody = null;
+            }
+        });
+
+
+        // ## 6. Animation Loop ##
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Step the physics world
+            world.step(1 / 60, clock.getDelta());
+
+            // Update the positions of the Three.js meshes
+            for (const object of objectsToUpdate) {
+                object.mesh.position.copy(object.body.position);
+                object.mesh.quaternion.copy(object.body.quaternion);
+            }
+
+            // Update the debugger visuals
+            // cannonDebugger.update();
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle window resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
