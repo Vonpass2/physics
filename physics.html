@@ -1,57 +1,75 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WebGL Physics Sandbox V2</title>
+    <title>WebGL Physics Sandbox V3</title>
     <style>
-        body { margin: 0; overflow: hidden; }
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
         canvas { display: block; }
-        #info {
+        #ui-container {
             position: absolute;
             top: 10px;
-            width: 100%;
-            text-align: center;
+            left: 10px;
             z-index: 100;
-            display:block;
+            background-color: rgba(40, 40, 40, 0.7);
+            padding: 15px;
+            border-radius: 10px;
             color: white;
-            font-family: monospace;
-            font-size: 16px;
         }
-        #buttons {
-            position: absolute;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, input[type="range"] {
+            width: 200px;
         }
         button {
-            padding: 10px 20px;
-            font-size: 16px;
+            padding: 10px 15px;
+            font-size: 14px;
             cursor: pointer;
+            margin-right: 10px;
         }
     </style>
 </head>
 <body>
-    <div id="info">Click and drag to throw objects.</div>
-    <div id="buttons">
-        <button id="addSphereBtn">Add Sphere</button>
-        <button id="addBoxBtn">Add Box</button>
-        <button id="resetBtn">Reset</button>
+    <div id="ui-container">
+        <div class="control-group">
+            <label for="gravitySlider">Gravity: <span id="gravityValue">-9.82</span> m/s²</label>
+            <input type="range" id="gravitySlider" min="-20" max="20" value="-9.82" step="0.1">
+        </div>
+        <div class="control-group">
+            <label for="materialSelect">Object Material</label>
+            <select id="materialSelect">
+                <option value="wood">Wood</option>
+                <option value="metal">Metal</option>
+                <option value="rubber">Rubber</option>
+                <option value="ice">Ice</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <button id="addSphereBtn">Add Sphere</button>
+            <button id="addBoxBtn">Add Box</button>
+            <button id="resetBtn">Reset</button>
+        </div>
+        <p style="font-size: 12px; margin-top: 20px;"><i>Tip: Click and drag objects to throw them.</i></p>
     </div>
 
     <script type="importmap">
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js",
-                "cannon-es-debugger": "https://unpkg.com/cannon-es-debugger@1.0.0/dist/cannon-es-debugger.js"
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
             }
         }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import * as CANNON from 'cannon-es';
-        import CannonDebugger from 'cannon-es-debugger';
 
-        // ## 1. Scene Setup ##
+        // ## 1. Scene and World Setup ##
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x222222);
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -61,45 +79,56 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // ## 2. Physics World Setup ##
         const world = new CANNON.World({
             gravity: new CANNON.Vec3(0, -9.82, 0)
         });
         world.broadphase = new CANNON.SAPBroadphase(world);
         world.allowSleep = true;
 
-        // Optional: for visualizing the physics bodies
-        // const cannonDebugger = new CannonDebugger(scene, world);
-
-        // ## 3. Materials ##
+        // ## 2. Material Definitions ##
         const groundMaterial = new CANNON.Material('ground');
-        const objectMaterial = new CANNON.Material('object');
-        const contactMaterial = new CANNON.ContactMaterial(groundMaterial, objectMaterial, {
-            friction: 0.3,
-            restitution: 0.4
-        });
-        world.addContactMaterial(contactMaterial);
+        const materials = {
+            wood: new CANNON.Material('wood'),
+            metal: new CANNON.Material('metal'),
+            rubber: new CANNON.Material('rubber'),
+            ice: new CANNON.Material('ice')
+        };
+
+        const contactMaterials = [
+            // Ground interactions
+            { materials: [groundMaterial, materials.wood],   props: { friction: 0.4, restitution: 0.2 } },
+            { materials: [groundMaterial, materials.metal],  props: { friction: 0.2, restitution: 0.4 } },
+            { materials: [groundMaterial, materials.rubber], props: { friction: 0.8, restitution: 0.8 } },
+            { materials: [groundMaterial, materials.ice],    props: { friction: 0.05, restitution: 0.1 } },
+            // Self interactions
+            { materials: [materials.wood, materials.wood],     props: { friction: 0.4, restitution: 0.2 } },
+            { materials: [materials.metal, materials.metal],   props: { friction: 0.1, restitution: 0.5 } },
+            { materials: [materials.rubber, materials.rubber], props: { friction: 0.9, restitution: 0.9 } },
+            { materials: [materials.ice, materials.ice],       props: { friction: 0.05, restitution: 0.2 } },
+             // Mixed interactions
+            { materials: [materials.wood, materials.metal],   props: { friction: 0.3, restitution: 0.3 } },
+            { materials: [materials.rubber, materials.metal], props: { friction: 0.5, restitution: 0.7 } },
+            { materials: [materials.ice, materials.rubber],   props: { friction: 0.01, restitution: 0.6 } }
+        ];
+
+        for (const cm of contactMaterials) {
+            world.addContactMaterial(new CANNON.ContactMaterial(cm.materials[0], cm.materials[1], cm.props));
+        }
 
 
-        // ## 4. Creating Scene Objects ##
-        // Ground
+        // ## 3. Scene Objects ##
         const groundBody = new CANNON.Body({
-            type: CANNON.Body.STATIC,
-            shape: new CANNON.Plane(),
-            material: groundMaterial
+            type: CANNON.Body.STATIC, shape: new CANNON.Plane(), material: groundMaterial
         });
         groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
         world.addBody(groundBody);
-
         const groundMesh = new THREE.Mesh(
-            new THREE.PlaneGeometry(100, 100),
-            new THREE.MeshStandardMaterial({ color: 0xcccccc })
+            new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0xcccccc })
         );
         groundMesh.rotation.x = -Math.PI / 2;
         groundMesh.receiveShadow = true;
         scene.add(groundMesh);
 
-        // Lighting
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
@@ -107,61 +136,48 @@
         directionalLight.castShadow = true;
         scene.add(directionalLight);
 
-        // Store objects that need to be updated
         let objectsToUpdate = [];
 
-        // Function to create a sphere
-        function createSphere(radius, position) {
-            const body = new CANNON.Body({
-                mass: 1,
-                shape: new CANNON.Sphere(radius),
-                material: objectMaterial
-            });
+        function createObject(shapeType, materialName) {
+            const position = new CANNON.Vec3(Math.random() * 4 - 2, 10, Math.random() * 4 - 2);
+            const material = materials[materialName];
+            let body, mesh;
+
+            if (shapeType === 'sphere') {
+                const radius = 0.5;
+                body = new CANNON.Body({ mass: 1, shape: new CANNON.Sphere(radius), material: material });
+                mesh = new THREE.Mesh( new THREE.SphereGeometry(radius), new THREE.MeshStandardMaterial({ color: new THREE.Color(Math.random(), Math.random(), Math.random()) }) );
+            } else { // box
+                const size = 1.0;
+                body = new CANNON.Body({ mass: 1, shape: new CANNON.Box(new CANNON.Vec3(size/2, size/2, size/2)), material: material });
+                mesh = new THREE.Mesh( new THREE.BoxGeometry(size, size, size), new THREE.MeshStandardMaterial({ color: new THREE.Color(Math.random(), Math.random(), Math.random()) }) );
+            }
             body.position.copy(position);
             world.addBody(body);
 
-            const mesh = new THREE.Mesh(
-                new THREE.SphereGeometry(radius),
-                new THREE.MeshStandardMaterial({
-                    color: new THREE.Color(Math.random(), Math.random(), Math.random())
-                })
-            );
             mesh.position.copy(body.position);
             mesh.castShadow = true;
             scene.add(mesh);
-
             objectsToUpdate.push({ mesh, body });
         }
 
-        // Function to create a box
-        function createBox(width, height, depth, position) {
-            const body = new CANNON.Body({
-                mass: 1,
-                shape: new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2)),
-                material: objectMaterial
-            });
-            body.position.copy(position);
-            world.addBody(body);
 
-            const mesh = new THREE.Mesh(
-                new THREE.BoxGeometry(width, height, depth),
-                 new THREE.MeshStandardMaterial({
-                    color: new THREE.Color(Math.random(), Math.random(), Math.random())
-                })
-            );
-            mesh.position.copy(body.position);
-            mesh.castShadow = true;
-            scene.add(mesh);
+        // ## 4. UI and Interaction ##
+        const gravitySlider = document.getElementById('gravitySlider');
+        const gravityValue = document.getElementById('gravityValue');
+        const materialSelect = document.getElementById('materialSelect');
 
-            objectsToUpdate.push({ mesh, body });
-        }
+        gravitySlider.addEventListener('input', (event) => {
+            const newGravity = parseFloat(event.target.value);
+            world.gravity.y = newGravity;
+            gravityValue.textContent = newGravity.toFixed(2);
+        });
 
-        // ## 5. User Interaction ##
         document.getElementById('addSphereBtn').addEventListener('click', () => {
-             createSphere(0.5, new CANNON.Vec3(Math.random() * 4 - 2, 10, Math.random() * 4 - 2));
+             createObject('sphere', materialSelect.value);
         });
         document.getElementById('addBoxBtn').addEventListener('click', () => {
-             createBox(1, 1, 1, new CANNON.Vec3(Math.random() * 4 - 2, 10, Math.random() * 4 - 2));
+             createObject('box', materialSelect.value);
         });
         document.getElementById('resetBtn').addEventListener('click', () => {
             for(const obj of objectsToUpdate) {
@@ -171,61 +187,44 @@
             objectsToUpdate = [];
         });
 
-        // Mouse Grabbing
+        // Mouse Grabbing Logic (unchanged from V2)
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         let grabbedBody = null;
         let mouseConstraint = null;
-
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // A virtual plane for raycasting
-
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         window.addEventListener('mousedown', (event) => {
+            if (event.target.tagName !== 'CANVAS') return;
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-
             const intersects = raycaster.intersectObjects(objectsToUpdate.map(o => o.mesh));
-
             if (intersects.length > 0) {
-                const intersectedMesh = intersects[0].object;
-                const obj = objectsToUpdate.find(o => o.mesh === intersectedMesh);
-
+                const obj = objectsToUpdate.find(o => o.mesh === intersects[0].object);
                 if (obj) {
                     grabbedBody = obj.body;
                     grabbedBody.wakeUp();
-
                     const hitPoint = intersects[0].point;
                     const pivot = grabbedBody.worldToLocal(new CANNON.Vec3().copy(hitPoint));
-
-                    // Create a point-to-point constraint
                     mouseConstraint = new CANNON.PointToPointConstraint(grabbedBody, pivot, grabbedBody, pivot);
                     world.addConstraint(mouseConstraint);
-
-                    // Move the virtual plane to the depth of the grabbed object
-                    plane.setFromNormalAndCoplanarPoint(
-                        camera.getWorldDirection(plane.normal),
-                        hitPoint
-                    );
+                    plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(plane.normal), hitPoint);
                 }
             }
         });
-
         window.addEventListener('mousemove', (event) => {
             if (mouseConstraint) {
                 mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
                 mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
                 raycaster.setFromCamera(mouse, camera);
-
                 const intersection = new THREE.Vector3();
                 raycaster.ray.intersectPlane(plane, intersection);
-
                 if (intersection) {
                     mouseConstraint.pivotB.copy(intersection);
                     grabbedBody.wakeUp();
                 }
             }
         });
-
         window.addEventListener('mouseup', () => {
             if (mouseConstraint) {
                 world.removeConstraint(mouseConstraint);
@@ -235,28 +234,19 @@
         });
 
 
-        // ## 6. Animation Loop ##
+        // ## 5. Animation Loop ##
         const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
-
-            // Step the physics world
             world.step(1 / 60, clock.getDelta());
-
-            // Update the positions of the Three.js meshes
             for (const object of objectsToUpdate) {
                 object.mesh.position.copy(object.body.position);
                 object.mesh.quaternion.copy(object.body.quaternion);
             }
-
-            // Update the debugger visuals
-            // cannonDebugger.update();
-
             renderer.render(scene, camera);
         }
         animate();
 
-        // Handle window resizing
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
